@@ -1,0 +1,241 @@
+name: 编译 LEDE X86_64 固件
+
+# =====================================================================
+# 触发规则：仅支持手动 workflow_dispatch，关闭 push / PR / 定时等所有自动触发
+# =====================================================================
+on:
+  workflow_dispatch:
+    inputs:
+      lede_branch:
+        description: 'LEDE 源码分支（固定 master）'
+        type: string
+        required: false
+        default: 'master'
+      default_ip:
+        description: '默认后台 IP'
+        type: string
+        required: false
+        default: '192.168.2.1'
+      default_password:
+        description: '默认登录密码'
+        type: string
+        required: false
+        default: '12345678'
+      hostname:
+        description: '路由器主机名'
+        type: string
+        required: false
+        default: 'LEDE'
+      rootfs_partsize:
+        description: '根分区大小（MB），默认 2048 即扩容 2G'
+        type: string
+        required: false
+        default: '2048'
+
+# =====================================================================
+# 权限：允许写入 GitHub Release
+# =====================================================================
+permissions:
+  contents: write
+
+# =====================================================================
+# 并发控制：同一 ref 只保留一个构建，避免 DL 缓存互相覆盖
+# =====================================================================
+concurrency:
+  group: lede-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LEDE_URL: https://github.com/coolsnowwolf/lede
+  BUILD_DIR: lede
+
+jobs:
+  build:
+    name: 编译 X86_64 固件（目标 generic）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      # ---------------------------------------------------------------
+      # ① 检出本仓库（含工作流、脚本与配置）
+      # ---------------------------------------------------------------
+      - name: ① 检出本仓库
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # ② 安装 Ubuntu 24.04 编译依赖
+      # ---------------------------------------------------------------
+      - name: ② 安装 Ubuntu 24.04 编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev \
+            libssl-dev libelf-dev zlib1g-dev python3 python3-pip \
+            python3-ply python3-yaml python3-setuptools qemu-utils \
+            rsync unzip file wget curl squashfs-tools jq \
+            xz-utils ccache fdisk util-linux
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ③ 固定拉取 LEDE 源码（分支由输入控制，默认 master）
+      # ---------------------------------------------------------------
+      - name: ③ 克隆 LEDE 源码
+        env:
+          BRANCH: ${{ github.event.inputs.lede_branch }}
+        run: |
+          branch="${BRANCH:-master}"
+          echo "==> 拉取分支: ${branch}"
+          git clone --depth 1 --branch "$branch" "$LEDE_URL" "$BUILD_DIR"
+          cd "$BUILD_DIR"
+          echo "LEDE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "LEDE_SHORT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ④ 恢复 DL 下载缓存 + ccache（须在 clone 之后，保证 lede/dl 存在）
+      # ---------------------------------------------------------------
+      - name: ④ 恢复 DL 下载缓存与 ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BUILD_DIR }}/dl
+            ~/.cache/ccache
+          key: lede-dl-${{ hashFiles('config/X86_64.config') }}
+          restore-keys: |
+            lede-dl-
+
+      # ---------------------------------------------------------------
+      # ⑤ 应用自定义配置（密码 / 主机名 / 后台 IP / 时区 / 主题 / 语言）
+      # ---------------------------------------------------------------
+      - name: ⑤ 应用自定义配置
+        env:
+          DEFAULT_IP: ${{ github.event.inputs.default_ip }}
+          DEFAULT_PASSWORD: ${{ github.event.inputs.default_password }}
+          HOSTNAME: ${{ github.event.inputs.hostname }}
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/customize-config.sh "$BUILD_DIR"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑥ 拉取第三方插件（浅克隆子目录方式，含前置连通性/分支/目录校验）
+      # ---------------------------------------------------------------
+      - name: ⑥ 拉取第三方插件
+        run: |
+          ./scripts/setup-thirdparty.sh "$BUILD_DIR"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑦ 更新并安装 Feeds
+      # ---------------------------------------------------------------
+      - name: ⑦ 更新并安装 Feeds
+        run: |
+          cd "$BUILD_DIR"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑧ 应用 .config + make defconfig + 严格前置校验
+      # ---------------------------------------------------------------
+      - name: ⑧ 应用 .config 并前置校验
+        run: |
+          cp config/X86_64.config "$BUILD_DIR/.config"
+          cd "$BUILD_DIR"
+          make defconfig
+          cd "$GITHUB_WORKSPACE"
+          ./scripts/pre-verify.sh "$BUILD_DIR"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑨ 下载依赖源码（DL 缓存加速）
+      # ---------------------------------------------------------------
+      - name: ⑨ 下载编译依赖（DL 缓存）
+        run: |
+          cd "$BUILD_DIR"
+          make download -j"$(nproc)"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑩ 严格编译：任意包报错立即终止（绝不使用 -k 续跑）
+      # ---------------------------------------------------------------
+      - name: ⑩ 严格编译固件
+        id: compile
+        run: |
+          cd "$BUILD_DIR"
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee ../build.log
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑪ 编译后校验（文件 / 格式 / 分区容量 / 插件）
+      # ---------------------------------------------------------------
+      - name: ⑪ 编译后校验
+        if: success()
+        run: |
+          ./scripts/post-build-check.sh "$BUILD_DIR" "${{ github.event.inputs.rootfs_partsize }}"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑫ 编译失败兜底：只提取 ERROR 定位信息，避免日志过载
+      # ---------------------------------------------------------------
+      - name: ⑫ 编译失败时提取精准错误日志
+        if: failure()
+        run: |
+          echo "==> 编译失败，提取 ERROR 定位信息"
+          : > ERROR-失败日志.log
+          grep -nE '(error:|Error [0-9]|\bERROR\b|fatal|No such file|undefined reference|cannot find|conflict|missing separator|Failed)' build.log \
+            >> ERROR-失败日志.log 2>/dev/null || true
+          echo "" >> ERROR-失败日志.log
+          echo "===== 编译日志末尾上下文（最后 80 行） =====" >> ERROR-失败日志.log
+          tail -n 80 build.log >> ERROR-失败日志.log 2>/dev/null || true
+          echo "==> 已生成 ERROR-失败日志.log"
+        shell: bash
+
+      - name: ⑬ 上传失败日志（仅 ERROR 日志）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERROR-fail-log-${{ github.run_id }}
+          path: ERROR-失败日志.log
+          retention-days: 7
+
+      # ---------------------------------------------------------------
+      # ⑭ 打包固件 + 生成 Release 元数据
+      # ---------------------------------------------------------------
+      - name: ⑭ 打包固件与元数据
+        id: package
+        if: success()
+        env:
+          DEFAULT_IP: ${{ github.event.inputs.default_ip }}
+          DEFAULT_PASSWORD: ${{ github.event.inputs.default_password }}
+          HOSTNAME: ${{ github.event.inputs.hostname }}
+        run: |
+          ./scripts/package-firmware.sh "$BUILD_DIR"
+        shell: bash
+
+      # ---------------------------------------------------------------
+      # ⑮ 上传 img.gz 到构建产物（冗余兜底，方便手动下载）
+      # ---------------------------------------------------------------
+      - name: ⑮ 上传 img.gz 到 Actions 产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.run_id }}
+          path: release/*.img.gz
+          retention-days: 7
+
+      # ---------------------------------------------------------------
+      # ⑯ 创建 GitHub Release 并上传固件（自动化发布）
+      # ---------------------------------------------------------------
+      - name: ⑯ 创建 Release 并上传固件
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: release/RELEASE_NOTES.md
+          files: release/*.img.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
