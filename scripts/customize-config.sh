@@ -51,8 +51,8 @@ PY
 fi
 [ -n "$PASS_HASH" ] || { echo "[错误] 生成密码哈希失败，请检查 openssl / python3"; exit 1; }
 
-# 替换 root 行（保留原 UID/GID/shell 字段）
-sed -i "s|^root:[^:]*:0:0:|root:${PASS_HASH}:0:0:|" "$SHADOW_FILE"
+# 替换 root 密码字段（兼容 lean 的 "root:::0:99999..." 等不同 shadow 格式）
+sed -i "s|^root:[^:]*:|root:${PASS_HASH}:|" "$SHADOW_FILE"
 if grep -Fq "root:${PASS_HASH}:" "$SHADOW_FILE"; then
   echo "    ✓ 密码已写入"
 else
@@ -101,6 +101,7 @@ cat > "$DEFAULTS_DIR/zzz9-custom-settings" <<EOF
 # 由 customize-config.sh 生成：最终覆盖时区 / 主题 / 语言
 uci -q batch <<-UCI
 	set system.@system[0].hostname='${HOSTNAME}'
+	set network.lan.ipaddr='${DEFAULT_IP}'
 	set system.@system[0].timezone='${TIMEZONE_STRING}'
 	set system.@system[0].zonename='${TIMEZONE_NAME}'
 	set luci.main.mediaurlbase='/luci-static/argon'
