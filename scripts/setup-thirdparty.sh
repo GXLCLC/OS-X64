@@ -44,23 +44,28 @@ declare -A REPOS=(
   [oaf]="https://github.com/destan19/OpenAppFilter"
 )
 
-echo "==> [thirdparty] 前置校验：仓库连通性 + master 分支"
+echo "==> [thirdparty] 前置校验：仓库连通性 + 默认分支（自动识别 master/main）"
 for name in "${!REPOS[@]}"; do
   url="${REPOS[$name]}"
-  if git ls-remote --exit-code --heads "$url" master >/dev/null 2>&1; then
-    echo "    ✓ ${name} 连通正常（master 分支存在）"
+  ok=0
+  for attempt in 1 2 3; do
+    git ls-remote --exit-code "$url" HEAD >/dev/null 2>&1 && { ok=1; break; }
+    sleep 3
+  done
+  if [ "$ok" -eq 1 ]; then
+    echo "    ✓ ${name} 连通正常"
   else
-    echo "[错误] 仓库不可达或 master 分支不存在：${url}"
-    echo "       修复建议：检查网络 / 仓库是否改名为 main / 是否被删除"
+    echo "[错误] 仓库不可达或不存在：${url}"
+    echo "       修复建议：检查网络 / 仓库是否被删除或改名"
     exit 1
   fi
 done
 
-echo "==> [thirdparty] 浅克隆第三方仓库"
+echo "==> [thirdparty] 浅克隆第三方仓库（自动跟随默认分支）"
 for name in "${!REPOS[@]}"; do
   url="${REPOS[$name]}"
   echo "    · 克隆 ${name}"
-  git clone --depth 1 --branch master "$url" "$WORK_DIR/$name" >/dev/null 2>&1 \
+  git clone --depth 1 "$url" "$WORK_DIR/$name" >/dev/null 2>&1 \
     || { echo "[错误] 浅克隆失败：${url}"; exit 1; }
 done
 
