@@ -103,24 +103,25 @@ for pkg in "${OPTIONAL_I18N[@]}"; do
     || echo "    ! 警告    ${pkg} 未启用（不影响主插件）"
 done
 
-# ---------- 4. 第三方插件源码目录就位 ----------
-THIRD_PARTY_DIRS=(
+# ---------- 4. 第三方插件已通过 feeds 就位 ----------
+# feeds install 后，第三方包以符号链接存在于 package/feeds/<feed>/<包名>/
+THIRD_PARTY_PKGS=(
   smartdns luci-app-smartdns
   luci-app-ddnsto
   adguardhome luci-app-adguardhome
-  oaf kmod-oaf luci-app-oaf
-  luci-app-turboacc turboacc
+  luci-app-oaf kmod-oaf appfilter
+  luci-app-turboacc
   luci-theme-argon luci-app-argon-config
-  luci-app-easytier
+  luci-app-easytier easytier
   luci-app-wechatpush
 )
 
-echo "==> 校验第三方插件源码目录"
-for d in "${THIRD_PARTY_DIRS[@]}"; do
-  if [ -d "$LEDE_DIR/package/$d" ]; then
-    echo "    ✓ 目录   package/$d"
+echo "==> 校验第三方插件已通过 feeds 就位"
+for p in "${THIRD_PARTY_PKGS[@]}"; do
+  if [ -n "$(find -L "$LEDE_DIR/package/feeds" -maxdepth 2 -type d -name "$p" -print -quit 2>/dev/null)" ]; then
+    echo "    ✓ 就位   ${p}"
   else
-    echo "    ✗ 缺失   package/$d   <-- 第三方插件未就位"
+    echo "    ✗ 缺失   ${p}   <-- 第三方 feed 未安装"
     FAIL=1
   fi
 done
@@ -131,7 +132,7 @@ if [ "$FAIL" -ne 0 ]; then
   echo "======================================================"
   echo "[失败] 前置校验未通过，终止编译，避免假成功 / 缺插件。"
   echo "修复建议："
-  echo "  1. 缺失插件：确认第三方仓库目录名/分支是否正确，重新执行 setup-thirdparty；"
+  echo "  1. 缺失插件：确认 third-party feeds 已注册、feeds install -a 成功，或 feed 仓库是否改名/删除；"
   echo "  2. 内核模块缺失：确认 target=x86_64 且内核版本匹配；"
   echo "  3. SFE 残留：确认 config 中未启用 kmod-shortcut-fe / fast-classifier。"
   echo "======================================================"

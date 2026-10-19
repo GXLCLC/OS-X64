@@ -1,98 +1,68 @@
 #!/usr/bin/env bash
 # =====================================================================
-# 脚本 2：第三方插件拉取（浅克隆子目录方式）
+# 脚本 2：注册第三方插件 feeds 源（src-git 方式，不做手动物理拷贝）
 # ---------------------------------------------------------------------
 # 规范：
-#   1. 优先使用官方源码包（官方已有插件不在此拉取）；
-#   2. 第三方插件采用浅克隆（--depth 1）+ 仅复制所需子目录，禁止冗余下载；
-#   3. 拉取前强制前置校验：仓库连通性、分支存在、目录完整，异常立即终止。
+#   1. 第三方插件一律通过 OpenWrt 标准 feeds 机制引入，由后续
+#      `./scripts/feeds update -a && ./scripts/feeds install -a` 统一拉取；
+#   2. src-git 会自动跟随各仓库默认分支（master/main 不写死，规避分支改名坑）；
+#   3. 嵌套结构（如 small-package 里 other/lean/luci-app-turboacc）、
+#      同目录多包（如 oaf/Makefile 同时产出 kmod-oaf）、共享 version.mk
+#      等均由 feeds 系统自动解析，不再手工 find/cp；
+#   4. 注册前强制前置校验：仓库连通性 + HEAD 可达，异常立即终止。
 #
-# 源码：
-#   kenzok8/openwrt-packages  —— 主软件源
-#   kenzok8/small-package      —— 作为 openwrt-packages 的补充
-#   mufeng05/turboacc          —— TurboACC 加速
-#   destan19/OpenAppFilter     —— oaf 应用过滤上游（缺失功能兜底引入）
+# feeds 源与覆盖插件：
+#   kenzok8/openwrt-packages  —— smartdns / adguardhome / argon / ddnsto / wechatpush 等
+#   kenzok8/small-package      —— luci-app-turboacc / luci-app-easytier 等
+#   destan19/OpenAppFilter     —— luci-app-oaf + kmod-oaf + appfilter
 #
 # 用法：./setup-thirdparty.sh <lede 目录>
 # =====================================================================
 set -euo pipefail
 
 LEDE_DIR="${1:?用法: setup-thirdparty.sh <lede 目录>}"
+FEEDS_FILE="$LEDE_DIR/feeds.conf.default"
 [ -d "$LEDE_DIR" ] || { echo "[错误] LEDE 目录不存在: $LEDE_DIR"; exit 1; }
+[ -f "$FEEDS_FILE" ] || { echo "[错误] 找不到 feeds.conf.default: $FEEDS_FILE"; exit 1; }
 
-WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-# ---------- 需从第三方拉取的插件/核心目录名 ----------
-# 说明：官方 LEDE 已含 mwan3/wol/upnp/ttyd/nlbwmon/autoreboot，无需在此拉取。
-PKGS=(
-  smartdns luci-app-smartdns
-  luci-app-ddnsto
-  adguardhome luci-app-adguardhome
-  oaf kmod-oaf luci-app-oaf
-  luci-app-turboacc turboacc
-  luci-theme-argon luci-app-argon-config
-  luci-app-easytier
-  luci-app-wechatpush
+# ---------- 第三方 feed 源（名称|URL） ----------
+FEEDS=(
+  "kenzo|https://github.com/kenzok8/openwrt-packages"
+  "small|https://github.com/kenzok8/small-package"
+  "oaf|https://github.com/destan19/OpenAppFilter"
 )
 
-# ---------- 第三方仓库（url|目录名） ----------
-declare -A REPOS=(
-  [kenzo]="https://github.com/kenzok8/openwrt-packages"
-  [small]="https://github.com/kenzok8/small-package"
-  [turboacc]="https://github.com/mufeng05/turboacc"
-  [oaf]="https://github.com/destan19/OpenAppFilter"
-)
-
-echo "==> [thirdparty] 前置校验：仓库连通性 + 默认分支（自动识别 master/main）"
-for name in "${!REPOS[@]}"; do
-  url="${REPOS[$name]}"
+echo "==> [thirdparty] 前置校验：仓库连通性（默认分支自动识别）"
+for entry in "${FEEDS[@]}"; do
+  name="${entry%%|*}"
+  url="${entry#*|}"
   ok=0
   for attempt in 1 2 3; do
-    git ls-remote --exit-code "$url" HEAD >/dev/null 2>&1 && { ok=1; break; }
+    if git ls-remote --exit-code "$url" HEAD >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
     sleep 3
   done
   if [ "$ok" -eq 1 ]; then
     echo "    ✓ ${name} 连通正常"
   else
     echo "[错误] 仓库不可达或不存在：${url}"
-    echo "       修复建议：检查网络 / 仓库是否被删除或改名"
     exit 1
   fi
 done
 
-echo "==> [thirdparty] 浅克隆第三方仓库（自动跟随默认分支）"
-for name in "${!REPOS[@]}"; do
-  url="${REPOS[$name]}"
-  echo "    · 克隆 ${name}"
-  git clone --depth 1 "$url" "$WORK_DIR/$name" >/dev/null 2>&1 \
-    || { echo "[错误] 浅克隆失败：${url}"; exit 1; }
-done
-
-echo "==> [thirdparty] 复制所需子目录到 lede/package/"
-MISSING=0
-for pkg in "${PKGS[@]}"; do
-  # 在全部第三方仓库中按目录名查找（深度 5 以内）
-  found="$(find "$WORK_DIR" -maxdepth 5 -type d -name "$pkg" -print -quit 2>/dev/null || true)"
-  if [ -n "$found" ] && [ -f "$found/Makefile" ]; then
-    # 复制成为 lede 主树内的包
-    rm -rf "$LEDE_DIR/package/$pkg"
-    cp -r "$found" "$LEDE_DIR/package/$pkg"
-    echo "    ✓ ${pkg}  <-- ${found#$WORK_DIR/}"
+echo "==> [thirdparty] 注册 feeds 源到 feeds.conf.default"
+for entry in "${FEEDS[@]}"; do
+  name="${entry%%|*}"
+  url="${entry#*|}"
+  line="src-git ${name} ${url}"
+  if grep -Fq "$line" "$FEEDS_FILE"; then
+    echo "    · 已存在：${name}（跳过）"
   else
-    echo "    ✗ 未找到 ${pkg}（请确认第三方仓库包含该目录）"
-    MISSING=1
+    echo "$line" >> "$FEEDS_FILE"
+    echo "    ✓ 已注册：${name}"
   fi
 done
 
-echo "==> [thirdparty] 校验目录完整性"
-if [ "$MISSING" -ne 0 ]; then
-  echo "[错误] 存在缺失的第三方插件目录，终止流程。"
-  echo "       修复建议："
-  echo "         1. 确认 kenzok8/openwrt-packages 与 small-package 的目录名是否变更（可 clone 后 ls 查看）；"
-  echo "         2. 确认 mufeng05/turboacc 是否包含 luci-app-turboacc；"
-  echo "         3. 确认 destan19/OpenAppFilter 是否包含 oaf / kmod-oaf / luci-app-oaf。"
-  exit 1
-fi
-
-echo "==> [thirdparty] 第三方插件拉取完成 ✔"
+echo "==> [thirdparty] 第三方 feeds 源注册完成（实际拉取由后续 feeds update -a 完成）✔"

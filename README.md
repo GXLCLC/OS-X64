@@ -13,7 +13,7 @@ lede-x86_64-builder/
 │   └── X86_64.config               # 编译配置（支持增删插件）
 ├── scripts/
 │   ├── customize-config.sh         # 自定义：密码/主机名/IP/时区/主题/语言
-│   ├── setup-thirdparty.sh         # 第三方插件浅克隆（含前置校验）
+│   ├── setup-thirdparty.sh         # 第三方插件 feeds 源注册（src-git）
 │   ├── pre-verify.sh               # 编译前严格校验（插件/冲突/内核模块）
 │   ├── post-build-check.sh         # 编译后校验（文件/格式/分区容量）
 │   └── package-firmware.sh         # 打包 + Release 元数据
@@ -83,11 +83,10 @@ lede-x86_64-builder/
 | 源 | 地址 | 用途 |
 |----|------|------|
 | kenzok8/openwrt-packages | https://github.com/kenzok8/openwrt-packages | 主软件源 |
-| kenzok8/small-package | https://github.com/kenzok8/small-package | openwrt-packages 补充 |
-| mufeng05/turboacc | https://github.com/mufeng05/turboacc | TurboACC 加速 |
-| destan19/OpenAppFilter | https://github.com/destan19/OpenAppFilter | oaf 应用过滤上游（兜底） |
+| kenzok8/small-package | https://github.com/kenzok8/small-package | openwrt-packages 补充（TurboACC / EasyTier） |
+| destan19/OpenAppFilter | https://github.com/destan19/OpenAppFilter | oaf 应用过滤（luci-app-oaf + kmod-oaf + appfilter） |
 
-> `setup-thirdparty.sh` 采用「浅克隆（`--depth 1`）+ 仅复制所需子目录」方式，拉取前强制校验仓库连通性、分支存在、目录完整，异常直接终止并输出修复建议。
+> `setup-thirdparty.sh` 将三个第三方仓库以 `src-git` 注册进 `feeds.conf.default`，由 `feeds update -a && feeds install -a` 统一拉取，自动跟随各仓库默认分支并解析嵌套/多包依赖，注册前强制校验仓库连通性（含重试）。
 
 ## 如何增删插件
 
@@ -96,7 +95,7 @@ lede-x86_64-builder/
 - **新增**：加一行 `CONFIG_PACKAGE_<软件包名>=y`
 - **删除**：删除对应行，或改为 `# CONFIG_PACKAGE_<软件包名> is not set`
 
-> 若新增第三方插件，需同步在 `scripts/setup-thirdparty.sh` 的 `PKGS` 数组中补充目录名，并在 `scripts/pre-verify.sh` 的非必需清单中补齐。
+> 若新增的插件来自既有第三方 feeds（kenzo/small/oaf），通常只需改 `.config`；若是新第三方仓库，需在 `scripts/setup-thirdparty.sh` 的 `FEEDS` 数组中追加 `src-git` 源，并在 `scripts/pre-verify.sh` 的非必需清单中补齐。
 
 ## 自定义维护（解耦说明）
 
@@ -109,5 +108,5 @@ lede-x86_64-builder/
 ## 常见问题
 
 - **构建失败排查**：直接看 Actions 中「⑬ 上传失败日志」产物里的 `ERROR-失败日志.log`，已按「缺失依赖 / 路径错误 / 分支异常 / 模块冲突」分类提取。
-- **插件目录名变更**：第三方仓库更新后可能改目录名，`setup-thirdparty.sh` 会报「未找到」，按其提示 `git clone` 后 `ls` 核对即可。
-- **TurboACC 与 SFE 冲突**：若 `mufeng05/turboacc` 的 Makefile 强依赖 SFE 模块，`pre-verify.sh` 会因「仍存在 kmod-shortcut-fe / fast-classifier」报错，此时需按需裁剪该依赖。
+- **第三方 feed 拉取失败**：`feeds update -a` 阶段若某 feed 仓库不可达或改名，按日志提示核对 `feeds.conf.default` 中的 `src-git` 源与对应仓库是否存在。
+- **TurboACC 与 SFE 冲突**：`luci-app-turboacc` 仅启用流量分载 / 全锥形 NAT / BBR，若 `.config` 中残留 `kmod-shortcut-fe` / `fast-classifier`，`pre-verify.sh` 会报错，需按需裁剪。
