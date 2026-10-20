@@ -1,0 +1,220 @@
+# ==================================================================
+# LEDE（lean 大雕源码）X86_64 固件全自动编译工作流
+# 规范：仅手动触发 | 固定 master 分支 | Asia/Shanghai | Argon 主题
+#       X86_64 Generic + squashfs | 严格编译模式 | 失败仅上传 ERROR 日志
+# ==================================================================
+name: LEDE X86_64 固件编译
+
+# 【触发规则】仅支持手动触发（workflow_dispatch），已关闭 push / PR / schedule 等全部自动触发
+on:
+  workflow_dispatch:
+
+# 创建 Release 并上传固件需要仓库内容写权限
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai                                # 固件时区固定 Asia/Shanghai
+  DEFAULT_IP: 192.168.2.1                          # 固件默认管理 IP
+  DEFAULT_PASSWORD: "12345678"                     # 固件默认 root 密码
+  DEFAULT_HOSTNAME: LEDE-X86                       # 固件默认主机名
+  LEDE_REPO: https://github.com/coolsnowwolf/lede  # lean 大雕 LEDE 源码仓库
+  LEDE_BRANCH: master                              # 固定拉取 master 分支
+  FIRMWARE_DIR: bin/targets/x86/64                 # 编译产物目录
+
+jobs:
+  build:
+    name: 编译 LEDE X86_64 固件（squashfs）
+    runs-on: ubuntu-24.04                          # Ubuntu 24.04 LTS 运行器
+    timeout-minutes: 350                           # 防止挂死（GitHub 上限 360 分钟）
+    steps:
+      # ---------- 第 1 步：输出构建环境信息 ----------
+      - name: 第 1 步：显示构建环境信息
+        run: |
+          echo "构建时间 : $(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "运行环境 : Ubuntu 24.04 LTS / $(nproc) 线程"
+          free -h | head -n 2
+          df -h / | tail -n 1
+
+      # ---------- 第 2 步：设置系统时区 ----------
+      - name: 第 2 步：设置系统时区为 Asia/Shanghai
+        run: sudo timedatectl set-timezone "Asia/Shanghai"
+
+      # ---------- 第 3 步：释放磁盘空间 ----------
+      - name: 第 3 步：释放磁盘空间（清理运行器预装软件）
+        run: |
+          sudo systemctl stop docker.socket docker 2>/dev/null || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache
+          sudo -E apt-get -y purge azure-cli* ghc* zulu* llvm* firefox* \
+                google-chrome* dotnet* powershell* openjdk* mongodb* 2>/dev/null || true
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get -y clean
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -n 1
+
+      # ---------- 第 4 步：安装编译依赖 ----------
+      - name: 第 4 步：安装 LEDE 编译依赖（lean 官方清单 + 校验工具）
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential clang curl cpp flex g++ gawk gcc-multilib g++-multilib gettext git \
+            gnat gperf intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev \
+            libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool libyaml-dev lld llvm mkisofs msmtp nano ninja-build \
+            p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-setuptools python3-dev rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev \
+            file jq parted gdisk
+          echo "[OK] 编译依赖安装完成"
+
+      # ---------- 第 5 步：检出本仓库（配置与脚本） ----------
+      - name: 第 5 步：检出本仓库（config 与自动化脚本）
+        uses: actions/checkout@v4
+
+      # ---------- 第 6 步：拉取 LEDE 源码 ----------
+      - name: 第 6 步：拉取 lean LEDE 源码（固定 master 分支，浅克隆加速）
+        run: |
+          git clone --depth=1 -b "$LEDE_BRANCH" "$LEDE_REPO" lede
+          cd lede
+          echo "源码最新提交: $(git log -1 --format='%h %s')"
+          # 记录源码版本号，供 toolchain 缓存精确匹配使用
+          echo "LEDE_SHA=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_ENV"
+
+      # ---------- 第 7 步：注入固件默认配置 ----------
+      - name: 第 7 步：注入默认配置（密码/主机名/IP/时区/Argon 主题）
+        working-directory: lede
+        run: |
+          # 独立脚本 01：源码拉取后直接替换 default-settings 密码配置文件
+          bash "$GITHUB_WORKSPACE/scripts/01-customize-settings.sh"
+
+      # ---------- 第 8 步：配置 feeds 与第三方插件 ----------
+      - name: 第 8 步：配置官方 feeds + 稀疏拉取第三方插件（含前置校验）
+        working-directory: lede
+        run: |
+          # 独立脚本 02：优先官方源，缺失插件按映射表稀疏检出第三方仓库
+          bash "$GITHUB_WORKSPACE/scripts/02-feeds-and-packages.sh"
+
+      # ---------- 第 9 步：载入固件配置并审计 ----------
+      - name: 第 9 步：载入 X86_64.config 并审计关键配置
+        working-directory: lede
+        run: |
+          cp "$GITHUB_WORKSPACE/config/X86_64.config" .config
+          make defconfig
+          # 审计 1：必须是 x86_64 目标
+          grep -q "^CONFIG_TARGET_x86_64=y" .config || { echo "ERROR: x86_64 目标缺失"; exit 1; }
+          # 审计 2：必须是 squashfs 格式
+          grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config || { echo "ERROR: squashfs 未启用"; exit 1; }
+          # 审计 3：禁止 SFE / Shortcut-FE 外部内核模块（依赖冲突处理策略）
+          if grep -qE "^CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_(sfe|shortcut-fe[a-z-]*)=y" .config; then
+            echo "ERROR: 检测到 SFE/Shortcut-FE，违反『仅保留流量分载/全锥NAT/BBR』策略"; exit 1
+          fi
+          # 审计 4（软提示）：流量分载选项是否生效
+          grep -q "^CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_offloading=y" .config \
+            || echo "提示: TurboACC 流量分载符号与预期不符，请核对上游选项名"
+          echo "[OK] 最终 .config 审计通过（x86_64 + squashfs + 无 SFE）"
+
+      # ---------- 第 10 步：恢复 toolchain 缓存 ----------
+      - name: 第 10 步：恢复 toolchain 缓存（同源码版本精确匹配，二次编译提速数倍）
+        uses: actions/cache@v4
+        with:
+          path: |
+            lede/staging_dir/toolchain-*
+            lede/build_dir/toolchain-*
+          key: lede-toolchain-x86_64-${{ env.LEDE_SHA }}
+
+      # ---------- 第 11 步：恢复 DL 缓存 ----------
+      - name: 第 11 步：恢复 DL 下载缓存（加速编译）
+        uses: actions/cache@v4
+        with:
+          path: lede/dl
+          key: lede-dl-x86_64-${{ github.run_number }}
+          restore-keys: |
+            lede-dl-x86_64-
+
+      # ---------- 第 12 步：下载源码包并校验 ----------
+      - name: 第 12 步：下载全部源码包并校验完整性
+        working-directory: lede
+        run: |
+          make download -j"$(nproc)"
+          # 检测下载不完整的残缺文件（<1KB 多为下载失败的错误页），严格模式直接终止
+          SMALL="$(find dl -type f -size -1024c 2>/dev/null || true)"
+          if [ -n "$SMALL" ]; then
+            echo "ERROR: 以下源码包下载不完整（缺失依赖/下载失败）："
+            echo "$SMALL"
+            exit 1
+          fi
+          echo "[OK] 源码包下载校验完成"
+
+      # ---------- 第 13 步：严格模式编译 ----------
+      - name: 第 13 步：严格模式编译（任意包报错立即终止整体编译）
+        working-directory: lede
+        run: |
+          set -o pipefail
+          echo "开始编译，线程数: $(($(nproc)+1))"
+          make -j"$(($(nproc)+1))" V=s 2>&1 | tee build.log
+
+      # ---------- 第 14 步：固件严格校验 ----------
+      - name: 第 14 步：校验固件（文件/格式/分区扩容2G/插件完整性）
+        working-directory: lede
+        run: |
+          # 独立脚本 03：任一项不达标直接终止，杜绝假成功
+          bash "$GITHUB_WORKSPACE/scripts/03-verify-firmware.sh"
+
+      # ---------- 第 15 步：失败时精准收集 ERROR 日志 ----------
+      - name: 第 15 步：失败时提取 ERROR 日志（仅错误，避免日志过载）
+        if: failure()
+        working-directory: lede
+        run: |
+          {
+            echo "============ 一、构建校验错误（分区/格式/插件完整性） ============"
+            cat ERROR_BUILD_CHECK.log 2>/dev/null || echo "（无）"
+            echo "============ 二、编译 ERROR 定位（make 报错，最近 300 条） ============"
+            grep -nE "ERROR:|make\[[0-9]+\]: \*\*\*|error:" build.log 2>/dev/null | tail -n 300 || echo "（无）"
+            echo "============ 三、缺失依赖 / 路径错误 / 模块冲突定位 ============"
+            grep -inE "No rule to make target|not found|No such file or directory|dependency|conflict" \
+              build.log 2>/dev/null | grep -viE "warning" | tail -n 100 || echo "（无）"
+          } > ../ERROR.log
+          echo "ERROR.log 已生成（仅保留错误定位信息）"
+
+      # ---------- 第 16 步：生成发布说明 ----------
+      - name: 第 16 步：生成 Release 说明（内核/固件版本/插件清单）
+        working-directory: lede
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/04-release-notes.sh" > ../release_notes.md
+          head -n 12 ../release_notes.md
+
+      # ---------- 第 17 步：固件加时间戳前缀 ----------
+      - name: 第 17 步：固件重命名（时间戳前缀，便于区分）
+        working-directory: lede
+        run: |
+          TS="$(date '+%Y%m%d-%H%M')"
+          # 优先 EFI 镜像，缺失时回退 Legacy BIOS 镜像（均为 squashfs-combined 的 img.gz）
+          SRC="$(find "$FIRMWARE_DIR" -maxdepth 1 -name '*squashfs-combined-efi.img.gz' -print -quit)"
+          [ -z "$SRC" ] && SRC="$(find "$FIRMWARE_DIR" -maxdepth 1 -name '*squashfs-combined.img.gz' -print -quit)"
+          [ -n "$SRC" ] || { echo "ERROR: 未找到 squashfs img.gz 镜像"; exit 1; }
+          cp "$SRC" "../${TS}_LEDE_x86_64_generic.img.gz"
+          {
+            echo "RELEASE_TAG=LEDE_x86_64_${TS}"
+            echo "FIRMWARE_FILE=${TS}_LEDE_x86_64_generic.img.gz"
+          } >> "$GITHUB_ENV"
+          echo "[OK] 待发布固件: ${TS}_LEDE_x86_64_generic.img.gz ($(du -h "../${TS}_LEDE_x86_64_generic.img.gz" | cut -f1))"
+
+      # ---------- 第 18 步：发布 Release ----------
+      - name: 第 18 步：创建 GitHub Release 并上传 img.gz（过滤多余产物）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: LEDE X86_64 固件 ${{ env.RELEASE_TAG }}
+          body_path: release_notes.md
+          files: ${{ env.FIRMWARE_FILE }}
+          make_latest: true
+
+      # ---------- 第 19 步：失败时上传 ERROR 日志 ----------
+      - name: 第 19 步：上传 ERROR 失败日志（仅错误文件，不上传全量日志）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERROR-logs
+          path: ERROR.log
+          if-no-files-found: ignore
