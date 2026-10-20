@@ -27,20 +27,20 @@ add_pkg() { # add_pkg <包名> <仓库URL> <分支> <仓库内目录>（"." 表�
   CANDIDATES["$1"]+="$2|$3|$4 "
 }
 
-# ---- kenzok8/small-package（master 分支，openwrt-packages 的补充源） ----
-add_pkg smartdns               https://github.com/kenzok8/small-package master smartdns
-add_pkg luci-app-smartdns      https://github.com/kenzok8/small-package master luci-app-smartdns
-add_pkg ddnsto                 https://github.com/kenzok8/small-package master ddnsto
-add_pkg luci-app-ddnsto        https://github.com/kenzok8/small-package master luci-app-ddnsto
-add_pkg adguardhome            https://github.com/kenzok8/small-package master adguardhome
-add_pkg adguardhome            https://github.com/kenzok8/small-package master AdGuardHome
-add_pkg luci-app-adguardhome   https://github.com/kenzok8/small-package master luci-app-adguardhome
-add_pkg easytier               https://github.com/kenzok8/small-package master easytier
-add_pkg luci-app-easytier      https://github.com/kenzok8/small-package master luci-app-easytier
-add_pkg luci-app-wechatpush    https://github.com/kenzok8/small-package master luci-app-wechatpush
-add_pkg luci-theme-argon-config https://github.com/kenzok8/small-package master luci-theme-argon-config
-add_pkg luci-theme-argon       https://github.com/kenzok8/small-package master luci-theme-argon
-add_pkg luci-app-autoreboot    https://github.com/kenzok8/small-package master luci-app-autoreboot
+# ---- kenzok8/small-package（main 分支，openwrt-packages 的补充源） ----
+add_pkg smartdns               https://github.com/kenzok8/small-package main smartdns
+add_pkg luci-app-smartdns      https://github.com/kenzok8/small-package main luci-app-smartdns
+add_pkg ddnsto                 https://github.com/kenzok8/small-package main ddnsto
+add_pkg luci-app-ddnsto        https://github.com/kenzok8/small-package main luci-app-ddnsto
+add_pkg adguardhome            https://github.com/kenzok8/small-package main adguardhome
+add_pkg adguardhome            https://github.com/kenzok8/small-package main AdGuardHome
+add_pkg luci-app-adguardhome   https://github.com/kenzok8/small-package main luci-app-adguardhome
+add_pkg easytier               https://github.com/kenzok8/small-package main easytier
+add_pkg luci-app-easytier      https://github.com/kenzok8/small-package main luci-app-easytier
+add_pkg luci-app-wechatpush    https://github.com/kenzok8/small-package main luci-app-wechatpush
+add_pkg luci-theme-argon-config https://github.com/kenzok8/small-package main luci-theme-argon-config
+add_pkg luci-theme-argon       https://github.com/kenzok8/small-package main luci-theme-argon
+add_pkg luci-app-autoreboot    https://github.com/kenzok8/small-package main luci-app-autoreboot
 
 # ---- kenzok8/openwrt-packages（main 分支）备选补充源 ----
 add_pkg luci-app-ddnsto        https://github.com/kenzok8/openwrt-packages main luci-app-ddnsto
@@ -54,6 +54,7 @@ add_pkg luci-app-oaf           https://github.com/destan19/OpenAppFilter master 
 
 # ---- TurboACC 加速（仓库根目录即包内容） ----
 add_pkg luci-app-turboacc      https://github.com/mufeng05/turboacc master .
+
 
 # ============================================================
 # 工具函数
