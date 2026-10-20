@@ -11,15 +11,15 @@
 # ============================================================
 set -euo pipefail
 
-EXTRA_DIR="package/extra"      # 第三方插件统一落位目录
-SPARSE_CACHE=".sparse-cache"   # 稀疏克隆缓存（同一仓库只克隆一次）
-mkdir -p "$EXTRA_DIR" "$SPARSE_CACHE"
+EXTRA_DIR="package/extra"
+TMP_CLONE=".tmp-clone"
+mkdir -p "$EXTRA_DIR"
+rm -rf "$TMP_CLONE"
 
 # ------------------------------------------------------------
 # 第三方插件映射表
 # 策略：优先使用 LEDE 内置 / 官方 feed 源码包；
 #       仅当本地缺失时，才按候选源顺序稀疏拉取第三方仓库。
-#       同一包可配置多个候选源（目录更名 / 仓库搬家时自动回退）。
 # ------------------------------------------------------------
 declare -A CANDIDATES
 
@@ -27,7 +27,7 @@ add_pkg() { # add_pkg <包名> <仓库URL> <分支> <仓库内目录>（"." 表�
   CANDIDATES["$1"]+="$2|$3|$4 "
 }
 
-# ---- kenzok8/small-package（main 分支，openwrt-packages 的补充源） ----
+# ---- kenzok8/small-package（main 分支） ----
 add_pkg smartdns               https://github.com/kenzok8/small-package main smartdns
 add_pkg luci-app-smartdns      https://github.com/kenzok8/small-package main luci-app-smartdns
 add_pkg ddnsto                 https://github.com/kenzok8/small-package main ddnsto
@@ -38,116 +38,90 @@ add_pkg luci-app-adguardhome   https://github.com/kenzok8/small-package main luc
 add_pkg easytier               https://github.com/kenzok8/small-package main easytier
 add_pkg luci-app-easytier      https://github.com/kenzok8/small-package main luci-app-easytier
 add_pkg luci-app-wechatpush    https://github.com/kenzok8/small-package main luci-app-wechatpush
-# ✅ 修复包名：luci-app-argon-config（原错误 luci-theme-argon-config）
+# ✅修复argon包名
 add_pkg luci-app-argon-config https://github.com/kenzok8/small-package main luci-app-argon-config
 add_pkg luci-theme-argon       https://github.com/kenzok8/small-package main luci-theme-argon
 add_pkg luci-app-autoreboot    https://github.com/kenzok8/small-package main luci-app-autoreboot
 
-# ---- kenzok8/openwrt-packages（main 分支）备选补充源 ----
+# ---- kenzok8/openwrt-packages 备选源 ----
 add_pkg luci-app-ddnsto        https://github.com/kenzok8/openwrt-packages main luci-app-ddnsto
 add_pkg luci-app-smartdns      https://github.com/kenzok8/openwrt-packages main luci-app-smartdns
 add_pkg luci-app-wechatpush    https://github.com/kenzok8/openwrt-packages main luci-app-wechatpush
 add_pkg luci-app-autoreboot    https://github.com/kenzok8/openwrt-packages main luci-app-autoreboot
 
-# ---- OAF 应用行为管理（含 kmod-oaf 内核模块源码，随本机内核编译） ----
+# ---- OAF ----
 add_pkg oaf                    https://github.com/destan19/OpenAppFilter master oaf
 add_pkg luci-app-oaf           https://github.com/destan19/OpenAppFilter master luci-app-oaf
 
-# ---- TurboACC 加速（仓库根目录即包内容） ----
+# ---- TurboACC ----
 add_pkg luci-app-turboacc      https://github.com/mufeng05/turboacc master .
 
 
 # ============================================================
 # 工具函数
 # ============================================================
-
-# 检查包是否已在本地（LEDE 内置 / 官方 feed 已安装 / 已拷贝的 extra）
 pkg_available() {
   find package feeds -maxdepth 4 -type d -name "$1" -print -quit 2>/dev/null | grep -q .
 }
 
-# 前置校验：仓库连通性 + 分支存在性
-precheck_repo() { # precheck_repo <仓库URL> <分支>
+precheck_repo() {
   git ls-remote --heads "$1" "refs/heads/$2" 2>/dev/null | grep -q "refs/heads/$2"
 }
 
-# 稀疏克隆（带缓存）：
-#   --filter=blob:none  部分克隆，按需下载 blob，避免整仓库冗余下载
-#   --depth=1           浅克隆，裁剪提交历史
-#   --sparse            稀疏检出，仅检出后续 sparse-checkout 指定的目录
-sparse_clone() { # sparse_clone <仓库URL> <分支> <目录("."=整仓库)> ; 输出缓存目录
-  local repo="$1" branch="$2" dir="$3" name cache
-  name="$(echo "$repo" | sed -E 's#https?://[^/]+/##; s#\.git$##; s#/#_#g')"
-  cache="$SPARSE_CACHE/$name"
-  if [ ! -d "$cache/.git" ]; then
-    echo "  [克隆] $repo ($branch) --filter=blob:none --depth=1" >&2
-    if [ "$dir" = "." ]; then
-      git clone --filter=blob:none --depth=1 -b "$branch" "$repo" "$cache" >&2
-    else
-      git clone --filter=blob:none --sparse --depth=1 -b "$branch" "$repo" "$cache" >&2
-    fi
-  fi
-  echo "$cache"
-}
-
 # ============================================================
-# 1. 官方 feeds 配置
-#    lede 默认 feeds.conf.default 已内置 kenzok8 两个第三方源；
-#    为避免 feeds update 全量克隆第三方仓库造成冗余下载，
-#    此处注释这两行，统一改由下方稀疏检出策略按需拉取。
+# 1. feeds 处理
 # ============================================================
 if grep -q "kenzok8" feeds.conf.default 2>/dev/null; then
   sed -i -E 's@^(src-git.*kenzok8.*)@# \1  # 已改用稀疏检出策略按需拉取@' feeds.conf.default
-  echo "[OK] kenzok8 第三方源已从默认 feeds 注释（改用稀疏检出）"
+  echo "[OK] kenzok8源注释完成"
 fi
 
-# ============================================================
-# 2. 更新并安装官方 feeds（packages / luci / routing / telephony）
-# ============================================================
 echo "===== 更新并安装官方 feeds ====="
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-# =========================
-# 3. 按需稀疏拉取缺失的第三方插件（优先官方源）
- # ============================================================
- echo "===== 第三方插件按需拉取 ====="
- PULLED=()
- FAILED_PKG=""
- for pkg in "${!CANDIDATES[@]}"; do
-   # 优先官方：本地（lede 内置 / 官方 feed）已有则直接跳过
-   if pkg_available "$pkg"; then
-     echo "[跳过] $pkg（官方/内置源已提供）"
-     continue
-   fi
-   pulled=0
-   for cand in ${CANDIDATES["$pkg"]}; do
-     IFS='|' read -r repo branch dir <<< "$cand"
-     # 前置校验 1：仓库连通性 + 分支存在
-     if ! precheck_repo "$repo" "$branch"; then
-       echo "  [警告] $repo 分支 $branch 不可达，尝试下一候选源" >&2
-       continue
-     fi
-     cache="$(sparse_clone "$repo" "$branch" "$dir")"
-     # 根目录即包的仓库（如 turboacc）：整仓库拷贝并剔除 git 元数据
-     if [ "$dir" = "." ]; then
-       mkdir -p "$EXTRA_DIR/$pkg"
-       cp -a "$cache/." "$EXTRA_DIR/$pkg/"
-       rm -rf "$EXTRA_DIR/$pkg/.git" "$EXTRA_DIR/$pkg/.github"
+# ============================================================
+# 2. 拉取插件主逻辑
+# ============================================================
+echo "===== 第三方插件按需拉取 ====="
+PULLED=()
+FAILED_PKG=""
+
+for pkg in "${!CANDIDATES[@]}"; do
+  if pkg_available "$pkg"; then
+    echo "[跳过] $pkg（官方/内置源已提供）"
+    continue
+  fi
+
+  pulled=0
+  for cand in ${CANDIDATES["$pkg"]}; do
+    IFS='|' read -r repo branch dir <<< "$cand"
+    if ! precheck_repo "$repo" "$branch"; then
+      echo "  [警告] $repo 分支 $branch 不可达，尝试下一候选源" >&2
+      continue
+    fi
+
+    # 每次拉取新建独立临时目录，用完删除，规避sparse --add兼容问题
+    rm -rf "$TMP_CLONE"
+    mkdir -p "$TMP_CLONE"
+    if [ "$dir" = "." ]; then
+      git clone --filter=blob:none --depth=1 -b "$branch" "$repo" "$TMP_CLONE" >&2
+      mkdir -p "$EXTRA_DIR/$pkg"
+      cp -a "$TMP_CLONE/." "$EXTRA_DIR/$pkg/"
+      rm -rf "$EXTRA_DIR/$pkg/.git" "$EXTRA_DIR/$pkg/.github"
+      pulled=1; break
+    else
+      git clone --filter=blob:none --sparse --depth=1 -b "$branch" "$repo" "$TMP_CLONE" >&2
+      git -C "$TMP_CLONE" sparse-checkout init --cone >&2
+      git -C "$TMP_CLONE" sparse-checkout set "$dir" >&2
+      # 校验Makefile
+       if [ ! -f "$TMP_CLONE/$dir/Makefile" ]; then
+         echo "  [警告] $repo 中不存在有效包目录: $dir，尝试下一候选源" >&2
+         continue
+       fi
+       cp -a "$TMP_CLONE/$dir" "$EXTRA_DIR/$pkg"
        pulled=1; break
      fi
-     # 稀疏检出目标目录，--add 追加目录，不覆盖原有检出列表
-     git -C "$cache" sparse-checkout init --cone >&2
-     git -C "$cache" sparse-checkout set --add "$dir" >&2
-     # 关键：追加目录后手动拉取新增目录blob文件
-     git -C "$cache" fetch >&2
-     # 前置校验 2：目录完整性（必须包含 Makefile 才是有效软件包）
-     if [ ! -f "$cache/$dir/Makefile" ]; then
-       echo "  [警告] $repo 中不存在有效包目录: $dir，尝试下一候选源" >&2
-       continue
-     fi
-     cp -a "$cache/$dir" "$EXTRA_DIR/$pkg"
-     pulled=1; break
    done
    if [ "$pulled" -eq 1 ]; then
      PULLED+=("$pkg")
@@ -156,8 +130,9 @@ echo "===== 更新并安装官方 feeds ====="
      FAILED_PKG="$FAILED_PKG $pkg"
    fi
  done
+ rm -rf "$TMP_CLONE"
  # ============================================================
- # 4. 结果汇总：任一插件拉取失败 -> 直接终止并输出修复建议
+ # 3. 结果汇总
  # ============================================================
  if [ -n "$FAILED_PKG" ]; then
    {
