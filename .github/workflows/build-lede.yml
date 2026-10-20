@@ -52,16 +52,18 @@ jobs:
           df -h /
 
       # ---- 3. 安装编译依赖（Ubuntu 24.04 LTS） --------------------------------
-      # OpenWrt 官方构建依赖（Ubuntu 24.04 清单）+ squashfs-tools（镜像深检
-      # unsquashfs 需要）+ libelf-dev（内核模块编译需要）。
+      # OpenWrt 官方构建依赖（Ubuntu 24.04 兼容清单）+ squashfs-tools（镜像深检
+      # unsquashfs 需要）+ libelf-dev（内核模块编译需要）+ time（构建计时）。
+      # 注意：24.04 已无 python3-distutils（PEP 632 移除）与 libncurses5-dev
+      # （并入 libncurses-dev），误用将导致 apt 直接失败。
       - name: 安装编译依赖
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            python3 python3-distutils python3-setuptools \
-            rsync swig unzip zlib1g-dev file wget \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3 python3-setuptools \
+            rsync swig unzip zlib1g-dev file wget time \
             squashfs-tools libelf-dev
           echo "依赖安装完成"
 
@@ -215,14 +217,16 @@ jobs:
 
       # ---- 19. 失败日志收集（仅当前面步骤失败时执行） -------------------------
       # 用户规范：失败只上传 ERROR 失败日志。
+      # 注意：此步骤【不设 working-directory】——早期步骤（依赖安装/克隆源码）
+      # 失败时 lede/ 目录尚未生成，写死工作目录会导致 bash 无法启动、
+      # 收集步骤自身报错，反而掩盖真实失败原因。脚本内部自行处理源码树缺失。
       - name: 收集失败日志（ERROR 日志）
         if: failure()
-        working-directory: ${{ env.LEDE_DIR }}
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/collect-errors.sh" \
             "${GITHUB_WORKSPACE}/${LEDE_DIR}" \
             "${GITHUB_WORKSPACE}/${LEDE_DIR}/build.log" \
-            "${GITHUB_WORKSPACE}/${LEDE_DIR}/error-logs" || true
+            "${GITHUB_WORKSPACE}/error-logs" || true
           echo "失败日志收集完成（即使收集脚本本身异常也不阻断上传）"
 
       # ---- 20. 上传失败日志工件（仅失败时） ----------------------------------

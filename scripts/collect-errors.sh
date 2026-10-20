@@ -19,13 +19,22 @@ set -uo pipefail
 SRC_ROOT="${1:-$(pwd)}"
 MAIN_LOG="${2:-}"
 OUT_DIR="${3:-}"
+EARLY_FAILURE=0   # 1 = 源码树尚未生成（早期步骤失败）
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info()  { echo -e "${BLUE}[失败日志]${NC} $*"; }
 log_ok()    { echo -e "${GREEN}[  OK  ]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[ 警告 ]${NC} $*"; }
 
-cd "${SRC_ROOT}" 2>/dev/null || { echo "源码根目录不存在：${SRC_ROOT}" >&2; exit 1; }
+cd "${SRC_ROOT}" 2>/dev/null || {
+  # 源码树尚未生成（依赖安装/克隆源码等早期步骤即失败）。
+  # 降级处理：以工作区根为收集点，保留环境信息与失败阶段线索，
+  # 绝不 exit 1（否则收集步骤自身失败，反而掩盖真实失败原因）。
+  echo "源码根目录不存在：${SRC_ROOT}（早期步骤失败，尚未克隆源码）" >&2
+  SRC_ROOT="$(pwd)"
+  cd "${SRC_ROOT}" || exit 1
+  EARLY_FAILURE=1
+}
 
 # ---- 自动探测主构建日志 -------------------------------------------------------
 if [[ -z "${MAIN_LOG}" ]]; then
@@ -110,6 +119,26 @@ done
 for s in scripts/fetch-thirdparty.sh scripts/apply-turboacc.sh scripts/personalize.sh; do
   [[ -f "${s}" ]] && cp -f "${s}" "${OUT_DIR}/" 2>/dev/null
 done
+
+# ---- 4b. 早期失败线索（源码树尚未生成的场景） ---------------------------------
+if [[ "${EARLY_FAILURE}" == "1" ]]; then
+  {
+    echo "==== 失败发生在源码克隆之前（早期步骤失败）"
+    echo "==== 可能失败的步骤：检出仓库 / 释放磁盘 / 安装编译依赖 / 克隆 LEDE"
+    echo "==== 完整错误请查看 Actions 运行日志中第一个标红步骤的输出"
+    echo ""
+    echo "==== 工作区顶层内容（判断失败点）："
+    ls -la "${SRC_ROOT}" 2>/dev/null | head -30
+    echo ""
+    echo "==== Actions 运行上下文："
+    echo "GITHUB_REPOSITORY : ${GITHUB_REPOSITORY:-（非 Actions 环境）}"
+    echo "GITHUB_RUN_ID    : ${GITHUB_RUN_ID:-?}"
+    echo "GITHUB_RUN_NUMBER: ${GITHUB_RUN_NUMBER:-?}"
+    echo "GITHUB_JOB       : ${GITHUB_JOB:-?}"
+    echo "GITHUB_SHA       : ${GITHUB_SHA:-?}"
+  } > "${OUT_DIR}/failure-stage.txt"
+  log_warn "源码树未生成，已写入 failure-stage.txt（早期失败线索）"
+fi
 
 # ---- 5. 环境信息 ---------------------------------------------------------------
 {
