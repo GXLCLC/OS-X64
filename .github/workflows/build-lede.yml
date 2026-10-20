@@ -203,6 +203,9 @@ jobs:
       # 用户规范：上传时间前缀命名的 img.gz 到 Releases。
       # 标签形如 x86_64-YYYYMMDD-HHMMSS；若同秒重跑导致标签已存在，
       # 退化为对既有 Release 追加/覆盖上传。
+      # 注意 glob 模式：gzip 产物名为「时间前缀_openwrt-x86-64-generic-squashfs-
+      # combined.img.gz」，combined 前是连字符（-combined），不可写成 _combined
+      # （2026-10-20 run #10 实测：写错导致 no matches found、发布失败）。
       - name: 创建 Release 并上传镜像
         working-directory: ${{ env.LEDE_DIR }}/bin/targets/x86/64
         env:
@@ -210,9 +213,11 @@ jobs:
         run: |
           TAG="x86_64-${{ steps.gzip.outputs.TIME_TAG }}"
           TITLE="LEDE X86_64 ${{ steps.gzip.outputs.TIME_TAG }}"
+          # 先校验产物存在（fail fast，避免 glob 静默不匹配）
+          ls -lh *combined*.img.gz
           gh release create "${TAG}" --title "${TITLE}" --notes-file release-notes.md \
-            *_combined*.img.gz \
-          || gh release upload "${TAG}" *_combined*.img.gz --clobber
+            *combined*.img.gz \
+          || gh release upload "${TAG}" *combined*.img.gz --clobber
           echo "Release 发布完成：${TAG}"
 
       # ---- 19. 失败日志收集（仅当前面步骤失败时执行） -------------------------
