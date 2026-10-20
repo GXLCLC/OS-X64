@@ -140,6 +140,33 @@ if [[ "${EARLY_FAILURE}" == "1" ]]; then
   log_warn "源码树未生成，已写入 failure-stage.txt（早期失败线索）"
 fi
 
+# ---- 4c. 关键配置符号状态（诊断符号丢失/覆盖失效类问题） ----------------------
+# 历史教训（run #7）：make defconfig 静默丢弃 .config 中构建系统不认识的符号，
+# 仅凭 check-packages 的「不存在」无法区分「未写入」与「被丢弃」。
+# 此处直接 dump 最终 .config 中关键符号的原样行，一轮定位。
+if [[ -f .config ]]; then
+  grep -E "TURBOACC_INCLUDE|kmod-oaf|PACKAGE_appfilter|luci-app-oaf|rpcd-mod-ucode|kmod-usb-net-rtl|miniupnpd|EASYTIER_INCLUDE" \
+    .config > "${OUT_DIR}/config-key-symbols.txt" 2>/dev/null || true
+  echo "==== .config 中关键符号（共 $(wc -l < "${OUT_DIR}/config-key-symbols.txt" 2>/dev/null || echo 0) 行）====" >> "${OUT_DIR}/config-key-symbols.txt"
+  log_ok "已生成 config-key-symbols.txt（TurboAcc/OAF/驱动等关键符号状态）"
+fi
+# kconfig 源证据：.config-package.in 中争议包的原始定义（判断生效的是哪一版）
+if [[ -f tmp/.config-package.in ]]; then
+  {
+    echo "==== .config-package.in 中 kmod-oaf 定义块 ===="
+    grep -n -A12 "^config PACKAGE_kmod-oaf" tmp/.config-package.in 2>/dev/null | head -30
+    echo ""
+    echo "==== .config-package.in 中 luci-app-turboacc 定义块（含 config 子符号）===="
+    grep -n -A40 "^config PACKAGE_luci-app-turboacc" tmp/.config-package.in 2>/dev/null | head -60
+  } > "${OUT_DIR}/kconfig-definitions.txt" 2>/dev/null || true
+  log_ok "已生成 kconfig-definitions.txt（kconfig 源定义证据）"
+fi
+# 扫描证据：tmp/.packages 中相关包的来源目录（判断覆盖是否生效）
+if [[ -f tmp/.packages ]]; then
+  grep -E "oaf|appfilter|turboacc" tmp/.packages > "${OUT_DIR}/packages-scan.txt" 2>/dev/null || true
+  log_ok "已生成 packages-scan.txt（包扫描来源证据）"
+fi
+
 # ---- 5. 环境信息 ---------------------------------------------------------------
 {
   echo "==== 收集时间（UTC）: $(date -u '+%Y-%m-%d %H:%M:%S')"

@@ -148,6 +148,22 @@ fetch_openappfilter() {
   # 同名，拷入 package/open-app-filter 后由 LEDE 构建系统自动覆盖官方版，
   # 因此不做跳过处理，强制使用上游 7.0.x 成套版本。
   copy_pkg_dir "${dest}" "oaf"
+  # ---- 消除 kmod-oaf 同名双定义（2026-10-20 run #8 实测问题） ----------------
+  # package/oaf（destan19 7.0.x）与官方 packages feed 的 net/open-app-filter
+  # （6.1.4）都定义 KernelPackage/oaf，包名均为 kmod-oaf。但两者【目录名不同】
+  # （oaf vs open-app-filter），不触发 include/scan.awk 的「PKGS 顶替 FEEDS」
+  # 机制，两个定义会同时进入 tmp/.config-package.in，kconfig 报：
+  #   error: recursive dependency detected!
+  #   symbol PACKAGE_kmod-oaf is selected by PACKAGE_kmod-oaf
+  # 导致 make defconfig 阶段符号解析异常（连带其他符号被丢弃）。
+  # open-app-filter 目录本身已由 package/open-app-filter（destan19 7.0.1）
+  # 顶替官方版，移除官方 feed 软链后 kmod-oaf/appfilter 均只剩唯一定义。
+  local link
+  for link in "${FEEDS_DIR}"/*/open-app-filter; do
+    [[ -e "${link}" ]] || continue
+    rm -f "${link}"
+    log_ok "已移除官方 feed 软链 ${link#${LEDE_DIR}/}（消除 kmod-oaf 同名双定义）"
+  done
   # open-app-filter 与官方 packages feed 的 net/open-app-filter 目录同名，
   # 拷入 package/open-app-filter 后由 LEDE 构建系统的「非 feeds 目录覆盖
   # feeds 同名目录」机制（include/scan.awk）自动顶替官方 6.1.4 旧版。

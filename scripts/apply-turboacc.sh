@@ -19,10 +19,17 @@
 #     · target/linux/generic/config-6.18 已含 `# CONFIG_SHORTCUT_FE is not set`
 #   唯一缺失：luci feed 的官方 luci-app-turboacc 无 FULLCONE 选项、且
 #   fw4 依赖不完整（只有 kmod-ipt-offload，缺 kmod-nft-offload）。
-#   因此仅从 mufeng05/turboacc 取 LuCI 应用（含 custom 层 FULLCONE 支持），
-#   拷入 package/turboacc/luci-app-turboacc 后由 LEDE 构建系统的
-#   「非 feeds 目录覆盖 feeds 同名目录」机制自动顶替官方 feed 版
-#   （include/scan.awk：PKGS 优先于 FEEDS，按目录名匹配）。
+#   因此仅从 mufeng05/turboacc 取含 FULLCONE 选项的 LuCI 应用，拷入
+#   package/turboacc/luci-app-turboacc 并【移除 feeds 同名软链】。
+#
+# 覆盖机制说明（2026-10-20 run#7 实测修正）：
+#   LEDE include/scan.mk 对 package/ 与 package/feeds/ 同名目录的处理只是
+#   把 PKGS 条目写进 OVERRIDELIST 并打 Override 标记（OVERRIDE_PKGS 仅用于
+#   版本污点），tmp/.config-package.in 的 kconfig 符号仍取自 feeds 版定义。
+#   若保留 feeds 软链，官方 luci feed 版（无 TURBOACC_INCLUDE_FULLCONE）
+#   的 config 段会生效，make defconfig 静默丢弃 FULLCONE 符号。
+#   故必须移除 package/feeds/luci/luci-app-turboacc 软链，
+#   使 package/turboacc/luci-app-turboacc 成为唯一定义源。
 #
 # 配置符号（custom/luci-app-turboacc/Makefile 定义，choice 互斥）：
 #   CONFIG_PACKAGE_TURBOACC_INCLUDE_FLOW_OFFLOADING=y   # 流量分载
@@ -141,6 +148,21 @@ mkdir -p "./package/turboacc"
 cp -a "${TURBOACC_DIR}/lede/luci-app-turboacc" "./package/turboacc/luci-app-turboacc"
 log_ok "包 luci-app-turboacc -> package/turboacc/luci-app-turboacc（覆盖官方 feed 版，含 FULLCONE 选项）"
 
+# 4.1 移除官方 feed 软链（关键！）
+#     LEDE 的 include/scan.mk 对 package/ 与 package/feeds/ 同名目录仅在
+#     Override 标记层面处理（OVERRIDE_PKGS 仅用于版本污点），
+#     tmp/.config-package.in 的 kconfig 符号仍取自 feeds 版定义——
+#     官方 luci feed 的 luci-app-turboacc 无 TURBOACC_INCLUDE_FULLCONE，
+#     导致 make defconfig 静默丢弃该符号（2026-10-20 run#7 实测）。
+#     移除软链使本目录成为唯一定义，保证 FULLCONE 符号生效。
+FEED_LINK="./package/feeds/luci/luci-app-turboacc"
+if [[ -e "${FEED_LINK}" || -L "${FEED_LINK}" ]]; then
+  rm -f "${FEED_LINK}"
+  log_ok "已移除官方 feed 软链 package/feeds/luci/luci-app-turboacc（kconfig 覆盖修复）"
+else
+  log_warn "未找到 ${FEED_LINK}（可能已移除或 feeds 结构变化）"
+fi
+
 # ---- 5. 应用 custom 层覆盖（官方 add_turboacc.sh 同款逻辑） -------------------
 log_info "应用 TurboAcc custom 层覆盖"
 mkdir -p "${PKG_DST}/root/usr/share/rpcd/ucode"
@@ -160,8 +182,8 @@ rm -rf "${PKG_DST}/root/usr/libexec"
 log_ok "custom 层覆盖完成（Makefile / uci-defaults / rpcd ucode / ucitrack / turboacc.js）"
 
 # ---- 6. 覆盖机制复核 ----------------------------------------------------------
-# LEDE include/scan.awk：package/ 下与 package/feeds/<feed>/ 同名的目录，
-# 非 feeds 版本自动胜出。此处验证我们拷入的版本确实带 FULLCONE 选项。
+# 前面已移除 feeds 软链，此处验证 package/turboacc 版确实带 FULLCONE 选项，
+# 且 feeds 目录下已无同名软链（双保险）。
 if grep -q "TURBOACC_INCLUDE_FULLCONE" "${PKG_DST}/Makefile"; then
   log_ok "覆盖生效确认：package/turboacc/luci-app-turboacc/Makefile 含 FULLCONE 选项"
 else
@@ -171,8 +193,11 @@ else
       "检查 https://github.com/mufeng05/turboacc/tree/main/custom/luci-app-turboacc 的 Makefile"
 fi
 if [[ -e "./package/feeds/luci/luci-app-turboacc" ]]; then
-  log_info "官方 feed 版 package/feeds/luci/luci-app-turboacc 仍在（扫描时自动被 package/turboacc 版顶替，符合 LEDE 覆盖机制）"
+  die "feeds 软链移除失败" \
+      "ls package/feeds/luci/luci-app-turboacc" "不存在" "仍存在" \
+      "rm 命令未生效或 feeds 结构变化" "手动执行 rm -f package/feeds/luci/luci-app-turboacc"
 fi
+log_ok "官方 feed 软链已移除，package/turboacc/luci-app-turboacc 为唯一定义源"
 
 # ---- 7. 汇总 ------------------------------------------------------------------
 log_info "TurboAcc 集成汇总："
@@ -180,6 +205,7 @@ echo "  内核层     : LEDE 官方 hack-${KERNEL_PATCHVER}（952/953/982/983/98
 echo "  全锥网络栈 : LEDE 官方 fullconenat-nft（kmod-nft-fullcone）+ nftables/libnftnl/firewall4 官方补丁"
 echo "  SFE 状态   : CONFIG_SHORTCUT_FE is not set（已移除 Shortcut-FE，未拷 shortcut-fe 包）"
 echo "  新增包     : package/turboacc/luci-app-turboacc（mufeng05 custom 层，含 FULLCONE 选项）"
+echo "  feeds 处理 : 已移除 package/feeds/luci/luci-app-turboacc 软链（kconfig 符号层面覆盖修复）"
 echo "  配置符号   : FLOW_OFFLOADING=y / BBR_CCA=y / FULLCONE=y（FAST_CLASSIFIER/SHORTCUT_FE_CM 不选）"
 echo "  依赖插件   : config 中需选择 rpcd-mod-ucode=y（ucode rpcd 后端支持）"
 log_ok "TurboAcc 集成完成（流量分载 + 全锥形 NAT + BBR，SFE 已移除，内核层全官方）"

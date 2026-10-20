@@ -230,11 +230,14 @@ jobs:
           echo "失败日志收集完成（即使收集脚本本身异常也不阻断上传）"
 
       # ---- 20. 上传失败日志工件（仅失败时） ----------------------------------
+      # 路径必须与 collect-errors.sh 的输出目录一致（工作区根 error-logs）；
+      # include-hidden-files: true 确保 .config 副本一并上传。
       - name: 上传失败日志工件
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: error-logs-run${{ github.run_number }}
-          path: ${{ env.LEDE_DIR }}/error-logs
+          path: ${{ github.workspace }}/error-logs
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: warn

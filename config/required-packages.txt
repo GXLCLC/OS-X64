@@ -90,7 +90,7 @@ kmod-usb-net-cdc-ether
 kmod-usb-net-cdc-ncm
 kmod-usb-net-cdc-mbim
 kmod-usb-net-qmi-wwan
-kmod-usb-net-r8152
+kmod-usb-net-rtl8152
 kmod-usb-net-rndis
 kmod-usb-serial
 kmod-usb-serial-option
