@@ -79,7 +79,7 @@ sparse_clone() { # sparse_clone <仓库URL> <分支> <目录("."=整仓库)> ; �
   name="$(echo "$repo" | sed -E 's#https?://[^/]+/##; s#\.git$##; s#/#_#g')"
   cache="$SPARSE_CACHE/$name"
   if [ ! -d "$cache/.git" ]; then
-    echo "  [克隆] $repo ($branch) --filter=blob:none --depth=1"
+    echo "  [克隆] $repo ($branch) --filter=blob:none --depth=1" >&2
     if [ "$dir" = "." ]; then
       git clone --filter=blob:none --depth=1 -b "$branch" "$repo" "$cache" >&2
     else
@@ -109,73 +109,69 @@ echo "===== 更新并安装官方 feeds ====="
 
 # ============================================================
 # 3. 按需稀疏拉取缺失的第三方插件（优先官方源）
-# ============================================================
-echo "===== 第三方插件按需拉取 ====="
-PULLED=()
-FAILED_PKG=""
-
-for pkg in "${!CANDIDATES[@]}"; do
-  # 优先官方：本地（lede 内置 / 官方 feed）已有则直接跳过
-  if pkg_available "$pkg"; then
-    echo "[跳过] $pkg（官方/内置源已提供）"
-    continue
-  fi
-
-  pulled=0
-  for cand in ${CANDIDATES["$pkg"]}; do
-    IFS='|' read -r repo branch dir <<< "$cand"
-    # 前置校验 1：仓库连通性 + 分支存在
-    if ! precheck_repo "$repo" "$branch"; then
-      echo "  [警告] $repo 分支 $branch 不可达，尝试下一候选源"
-      continue
-    fi
-    cache="$(sparse_clone "$repo" "$branch" "$dir")"
-    # 根目录即包的仓库（如 turboacc）：整仓库拷贝并剔除 git 元数据
-    if [ "$dir" = "." ]; then
-      mkdir -p "$EXTRA_DIR/$pkg"
-      cp -a "$cache/." "$EXTRA_DIR/$pkg/"
-      rm -rf "$EXTRA_DIR/$pkg/.git" "$EXTRA_DIR/$pkg/.github"
-      pulled=1; break
-    fi
-    # 稀疏检出目标目录
-    git -C "$cache" sparse-checkout set "$dir" >&2
-    # 前置校验 2：目录完整性（必须包含 Makefile 才是有效软件包）
-    if [ ! -f "$cache/$dir/Makefile" ]; then
-      echo "  [警告] $repo 中不存在有效包目录: $dir，尝试下一候选源"
-      continue
-    fi
-    cp -a "$cache/$dir" "$EXTRA_DIR/$pkg"
-    pulled=1; break
-  done
-
-  if [ "$pulled" -eq 1 ]; then
-    PULLED+=("$pkg")
-    echo "[拉取] $pkg"
-  else
-    FAILED_PKG="$FAILED_PKG $pkg"
-  fi
-done
-
-# ============================================================
-# 4. 结果汇总：任一插件拉取失败 -> 直接终止并输出修复建议
-# ============================================================
-if [ -n "$FAILED_PKG" ]; then
-  {
-    echo "ERROR: 以下第三方插件拉取失败:$FAILED_PKG"
-    echo "修复建议："
-    echo "  1. 检查仓库连通性：git ls-remote <仓库URL>"
-    echo "  2. 确认上游分支是否更名（main / master 互换）"
-    echo "  3. 确认仓库内包目录是否更名或移动"
-    echo "  4. 手动修正 scripts/02-feeds-and-packages.sh 映射表后重新触发工作流"
-  } >&2
-  exit 1
-fi
-
-echo "===== 第三方插件拉取完成 ====="
-if [ "${#PULLED[@]}" -gt 0 ]; then
-  printf '本次稀疏拉取清单：\n - %s\n' "${PULLED[@]}"
-else
-  echo "全部插件均由官方/内置源提供，无需拉取第三方仓库"
-fi
-echo "package/extra 目录内容："
-ls -1 "$EXTRA_DIR" 2>/dev/null || echo "（空）"
+ # ============================================================
+ echo "===== 第三方插件按需拉取 ====="
+ PULLED=()
+ FAILED_PKG=""
+ for pkg in "${!CANDIDATES[@]}"; do
+   # 优先官方：本地（lede 内置 / 官方 feed）已有则直接跳过
+   if pkg_available "$pkg"; then
+     echo "[跳过] $pkg（官方/内置源已提供）"
+     continue
+   fi
+   pulled=0
+   for cand in ${CANDIDATES["$pkg"]}; do
+     IFS='|' read -r repo branch dir <<< "$cand"
+     # 前置校验 1：仓库连通性 + 分支存在
+     if ! precheck_repo "$repo" "$branch"; then
+       echo "  [警告] $repo 分支 $branch 不可达，尝试下一候选源" >&2
+       continue
+     fi
+     cache="$(sparse_clone "$repo" "$branch" "$dir")"
+     # 根目录即包的仓库（如 turboacc）：整仓库拷贝并剔除 git 元数据
+     if [ "$dir" = "." ]; then
+       mkdir -p "$EXTRA_DIR/$pkg"
+       cp -a "$cache/." "$EXTRA_DIR/$pkg/"
+       rm -rf "$EXTRA_DIR/$pkg/.git" "$EXTRA_DIR/$pkg/.github"
+       pulled=1; break
+     fi
+     # 稀疏检出目标目录，新增init --cone初始化稀疏模式
+     git -C "$cache" sparse-checkout init --cone >&2
+     git -C "$cache" sparse-checkout set "$dir" >&2
+     # 前置校验 2：目录完整性（必须包含 Makefile 才是有效软件包）
+     if [ ! -f "$cache/$dir/Makefile" ]; then
+       echo "  [警告] $repo 中不存在有效包目录: $dir，尝试下一候选源" >&2
+       continue
+     fi
+     cp -a "$cache/$dir" "$EXTRA_DIR/$pkg"
+     pulled=1; break
+   done
+   if [ "$pulled" -eq 1 ]; then
+     PULLED+=("$pkg")
+     echo "[拉取] $pkg"
+   else
+     FAILED_PKG="$FAILED_PKG $pkg"
+   fi
+ done
+ # ============================================================
+ # 4. 结果汇总：任一插件拉取失败 -> 直接终止并输出修复建议
+ # ============================================================
+ if [ -n "$FAILED_PKG" ]; then
+   {
+     echo "ERROR: 以下第三方插件拉取失败:$FAILED_PKG"
+     echo "修复建议："
+     echo "  1. 检查仓库连通性：git ls-remote <仓库URL>"
+     echo "  2. 确认上游分支是否更名（main / master 互换）"
+     echo "  3. 确认仓库内包目录是否更名或移动"
+     echo "  4. 手动修正 scripts/02-feeds-and-packages.sh 映射表后重新触发工作流"
+   } >&2
+   exit 1
+ fi
+ echo "===== 第三方插件拉取完成 ====="
+ if [ "${#PULLED[@]}" -gt 0 ]; then
+   printf '本次稀疏拉取清单：\n - %s\n' "${PULLED[@]}"
+ else
+   echo "全部插件均由官方/内置源提供，无需拉取第三方仓库"
+ fi
+ echo "package/extra 目录内容："
+ ls -1 "$EXTRA_DIR" 2>/dev/null || echo "（空）"
