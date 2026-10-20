@@ -91,6 +91,7 @@ kmod-usb-net-cdc-ncm
 kmod-usb-net-cdc-mbim
 kmod-usb-net-qmi-wwan
 kmod-usb-net-rtl8152
+r8152-firmware
 kmod-usb-net-rndis
 kmod-usb-serial
 kmod-usb-serial-option
