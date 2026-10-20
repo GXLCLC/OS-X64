@@ -38,7 +38,8 @@ add_pkg luci-app-adguardhome   https://github.com/kenzok8/small-package main luc
 add_pkg easytier               https://github.com/kenzok8/small-package main easytier
 add_pkg luci-app-easytier      https://github.com/kenzok8/small-package main luci-app-easytier
 add_pkg luci-app-wechatpush    https://github.com/kenzok8/small-package main luci-app-wechatpush
-add_pkg luci-theme-argon-config https://github.com/kenzok8/small-package main luci-theme-argon-config
+# ✅ 修复包名：luci-app-argon-config（原错误 luci-theme-argon-config）
+add_pkg luci-app-argon-config https://github.com/kenzok8/small-package main luci-app-argon-config
 add_pkg luci-theme-argon       https://github.com/kenzok8/small-package main luci-theme-argon
 add_pkg luci-app-autoreboot    https://github.com/kenzok8/small-package main luci-app-autoreboot
 
@@ -107,7 +108,7 @@ echo "===== 更新并安装官方 feeds ====="
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-# ============================================================
+# =========================
 # 3. 按需稀疏拉取缺失的第三方插件（优先官方源）
  # ============================================================
  echo "===== 第三方插件按需拉取 ====="
@@ -135,9 +136,11 @@ echo "===== 更新并安装官方 feeds ====="
        rm -rf "$EXTRA_DIR/$pkg/.git" "$EXTRA_DIR/$pkg/.github"
        pulled=1; break
      fi
-     # 稀疏检出目标目录，新增init --cone初始化稀疏模式
+     # 稀疏检出目标目录，--add 追加目录，不覆盖原有检出列表
      git -C "$cache" sparse-checkout init --cone >&2
-     git -C "$cache" sparse-checkout set "$dir" >&2
+     git -C "$cache" sparse-checkout set --add "$dir" >&2
+     # 关键：追加目录后手动拉取新增目录blob文件
+     git -C "$cache" fetch >&2
      # 前置校验 2：目录完整性（必须包含 Makefile 才是有效软件包）
      if [ ! -f "$cache/$dir/Makefile" ]; then
        echo "  [警告] $repo 中不存在有效包目录: $dir，尝试下一候选源" >&2
