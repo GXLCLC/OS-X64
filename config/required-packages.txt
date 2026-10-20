@@ -1,0 +1,102 @@
+# =============================================================================
+# config/required-packages.txt —— 必装包清单（scripts/check-packages.sh 校验依据）
+#
+# 行格式（忽略空行与 # 注释行）：
+#   <包名>                  —— 包：config 模式校验 CONFIG_PACKAGE_<包名>=y 存在；
+#                              manifest 模式校验镜像已安装该包
+#   @symbol <CONFIG_符号>   —— 仅 config 模式校验（非包，如 TurboAcc 功能开关）
+#
+# 命名以 LEDE master 2026-10-20 实测为准；与用户规范中原插件名的对应关系：
+#   luci-theme-argon-config -> luci-app-argon-config（官方现名，功能相同）
+#   luci-app-easytier       -> luci-app-easytier-next（官方现名，配套官方核心）
+# =============================================================================
+
+# ---- LuCI 基础与防火墙 ------------------------------------------------------
+luci
+firewall4
+rpcd-mod-ucode
+
+# ---- (1) SmartDNS ------------------------------------------------------------
+luci-app-smartdns
+smartdns
+
+# ---- (2) DDNSTO（kenzok8/openwrt-packages）----------------------------------
+luci-app-ddnsto
+ddnsto
+
+# ---- (3) AdGuardHome ---------------------------------------------------------
+luci-app-adguardhome
+adguardhome
+
+# ---- (4) OpenAppFilter（destan19/OpenAppFilter 7.0.x 成套）-------------------
+luci-app-oaf
+appfilter
+kmod-oaf
+
+# ---- (5) TurboAcc（mufeng05/turboacc 版，仅流量分载/全锥/BBR）----------------
+luci-app-turboacc
+@symbol CONFIG_PACKAGE_TURBOACC_INCLUDE_FLOW_OFFLOADING=y
+@symbol CONFIG_PACKAGE_TURBOACC_INCLUDE_BBR_CCA=y
+@symbol CONFIG_PACKAGE_TURBOACC_INCLUDE_FULLCONE=y
+
+# ---- (6) MWAN3 ---------------------------------------------------------------
+luci-app-mwan3
+mwan3
+
+# ---- (7)(8) Argon 主题 -------------------------------------------------------
+luci-theme-argon
+luci-app-argon-config
+
+# ---- (9) nlbwmon -------------------------------------------------------------
+luci-app-nlbwmon
+nlbwmon
+
+# ---- (10) EasyTier（官方 easytier-next 成套）---------------------------------
+luci-app-easytier-next
+easytier-next
+
+# ---- (11) Wake-on-LAN --------------------------------------------------------
+luci-app-wol
+etherwake
+
+# ---- (12) UPnP（fw4 下 miniupnpd-nftables）-----------------------------------
+luci-app-upnp
+miniupnpd-nftables
+
+# ---- (13) TTYD ---------------------------------------------------------------
+luci-app-ttyd
+ttyd
+
+# ---- (14) 定时重启 -----------------------------------------------------------
+luci-app-autoreboot
+
+# ---- (15) 微信推送 -----------------------------------------------------------
+luci-app-wechatpush
+
+# ---- 网卡驱动（i211 / RTL8111 及常见型号）------------------------------------
+kmod-igb
+kmod-igc
+kmod-e1000e
+kmod-r8169
+kmod-alx
+kmod-atl1
+kmod-atl2
+
+# ---- USB 网卡 / 存储 / 文件系统 -----------------------------------------------
+kmod-usb-net
+kmod-usb-net-asix
+kmod-usb-net-asix-ax88179
+kmod-usb-net-cdc-ether
+kmod-usb-net-cdc-ncm
+kmod-usb-net-cdc-mbim
+kmod-usb-net-qmi-wwan
+kmod-usb-net-r8152
+kmod-usb-net-rndis
+kmod-usb-serial
+kmod-usb-serial-option
+kmod-usb-storage
+kmod-usb-storage-uas
+kmod-fs-vfat
+kmod-fs-exfat
+kmod-fs-ntfs3
+kmod-tun

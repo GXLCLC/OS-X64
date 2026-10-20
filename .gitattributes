@@ -1,0 +1,8 @@
+# 强制 shell 脚本与配置文件使用 LF 行尾（CI 在 Linux 运行，CRLF 会导致 bad interpreter）
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.config text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+.gitignore text eol=lf
